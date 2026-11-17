@@ -74,6 +74,7 @@
   #bApply:disabled,#bLeadApply:disabled{background:linear-gradient(180deg,#FFFFFF,#F2F4FA);border-color:rgba(30,42,90,.12);color:var(--muted);box-shadow:none;text-shadow:none}
   #bApply.pulse{animation:pulse 1.6s ease-in-out infinite}
   @media (prefers-reduced-motion:reduce){#bApply.pulse{animation:none}}
+  .btn.icon{width:36px;padding:0;justify-content:center}
   .lead-acts{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
   .tabs{display:inline-flex;padding:3px;gap:2px;background:#E9EBF0;border-radius:9px}
   .tabs button{border:0;background:transparent;height:30px;padding:0 12px;border-radius:7px;color:var(--ink-2);font-weight:600;font-size:12.5px}
@@ -460,6 +461,8 @@
   </div>
   <span class="grow"></span>
   <div class="group">
+    <button class="btn icon" id="bUndo" disabled title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M7.5 5 4 8.5 7.5 12M4.5 8.5h7a4.5 4.5 0 0 1 0 9H9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="btn icon" id="bRedo" disabled title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M12.5 5 16 8.5 12.5 12M15.5 8.5h-7a4.5 4.5 0 0 0 0 9H11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="btn" id="bSort" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M6 4v12M3 13l3 3 3-3M11 5h6M11 9h4.5M11 13h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Sort by count</button>
     <button class="btn" id="bDup" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M5 3v4a4 4 0 0 0 4 4h1a4 4 0 0 1 4 4v2M15 3v4a4 4 0 0 1-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>Remove duplicates</button>
     <button class="btn" id="bReset" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Reset filters</button>
@@ -613,6 +616,10 @@ const BASE_AFTER = ['Area','District','State','Country','Google Ads Location','M
 // Columns filled from the raw dump. detect = header patterns tried in order.
 const WB_ = '(^|[^a-z])';
 const FIELD_DEFAULTS = [
+  // number columns: "3 (25.0)" in the raw file -> 3 (the bracket % is dropped), added up per location
+  {name:'SV',            detect:[new RegExp(WB_ + 'sv([^a-z]|$)', 'i'), /site[\s_]*visit/i], metric:true},
+  {name:'Booking',       detect:[/booking|booked/i], metric:true},
+  {name:'Project',       detect:[/project/i]},
   {name:'Campaign ID',   detect:[new RegExp(WB_ + 'campaign[\\s_]*id', 'i')]},
   {name:'Device',        detect:[/device/i]},
   {name:'Campaign Name', detect:[/campaign[\s_]*name/i, /^\s*campaign\s*$/i]},
@@ -628,7 +635,11 @@ try {
   const fc = JSON.parse(localStorage.getItem('pinTool.fields') || 'null');
   if (fc) {
     (fc.prefs || []).forEach(p => { const f = FIELDS.find(x => x.name === p.name); if (f) f.pref = p.pref; });
-    (fc.custom || []).forEach(c => { if (!FIELDS.some(x => x.name === c.name)) FIELDS.push({name:c.name, pref:c.pref, src:-1, custom:true, detect:[]}); });
+    (fc.custom || []).forEach(c => {
+      const built = FIELDS.find(x => x.name.toLowerCase() === String(c.name).toLowerCase());
+      if (built) { if (built.pref === '__auto') built.pref = c.pref; return; }     // now built in: keep the user's column choice
+      FIELDS.push({name:c.name, pref:c.pref, src:-1, custom:true, detect:[]});
+    });
     USER_VIS = fc.vis || {};
   }
 } catch (e) {}
@@ -772,6 +783,8 @@ const DEFAULT_W = {'Qualified':155,'Qualified %':170,'Ad Strategy':175,'Campaign
 const CLICKABLE = new Set(['Ad Strategy','Source','Location / Pincode','Fetched API Pincode','Area','District','State','Tier','Urban Type']);
 const SELECT_COLS = new Set(['Source','Ad Strategy','Area','District','State','Country','Tier','Urban Type']);
 const NUM_COLS = new Set(['Count','Qualified','Qualified %']);
+let METRIC = {};                                    // name -> number per raw row (SV, Booking …)
+const isNumCol = c => NUM_COLS.has(c) || !!METRIC[c];
 try {
   const saved = JSON.parse(localStorage.getItem('pinTool.layout') || 'null');
   if (saved && Array.isArray(saved.order)) COL_ORDER = saved.order.slice();
@@ -850,7 +863,7 @@ function buildPickers() {
 
 function locPriority(h) {
   if (PIN_HDR.test(h) || SKIP_HDR.test(h) || QUAL_HDR.test(h) || CAMP_HDR.test(h) || TYPE_HDR.test(h) || PLAT_HDR.test(h) ||
-      /device|utm|strategy|(^|[^a-z])ads?[\s_]*(name|group|set)|creative|keyword/i.test(h)) return 0;
+      /device|utm|strategy|(^|[^a-z])ads?[\s_]*(name|group|set)|creative|keyword|project|booking|booked|site[\s_]*visit|(^|[^a-z])sv([^a-z]|$)/i.test(h)) return 0;
   for (const [re, p] of LOC_HDR) if (re.test(h)) return p;
   return 0;
 }
@@ -987,6 +1000,7 @@ async function analyze() {
     computeLeadMeta();
     aggregate();
     clearFilters();
+    resetHistory(); CLEARED = null;
     renderHead();
     refresh();
     setProgress(1);
@@ -1092,6 +1106,20 @@ function computeLeadMeta() {
   FIELDS.filter(f => f.src === -2).forEach(f => {
     const names = FIELD_VALS['Campaign Name'];
     FIELD_VALS[f.name] = names ? names.map(inferType) : ROWS.map(() => '');
+  });
+  // Columns whose values are numbers or "3 (25.0)" become number columns: keep only the number, add them up
+  METRIC = {};
+  FIELDS.forEach(f => {
+    const vals = FIELD_VALS[f.name];
+    if (!vals || /\bid$/i.test(f.name)) return;
+    const filled = vals.filter(Boolean);
+    if (!filled.length) return;
+    const withBracket = filled.filter(v => /^-?[\d,]+(?:\.\d+)?\s*\(.*\)$/.test(v)).length / filled.length;
+    const numeric = filled.filter(v => cellNums(v)).length / filled.length;
+    if (withBracket >= 0.8 || (f.metric && numeric >= 0.8)) {
+      METRIC[f.name] = vals.map(v => { const n = cellNums(v); return n ? n.n : 0; });
+      delete FIELD_VALS[f.name];                     // not a text column any more
+    }
   });
   if (!HAS_QUAL) LEAD_Q = null;
   buildLeadSelects();
@@ -1210,7 +1238,7 @@ function aggregate() {
     ents.forEach(en => {
       let g = groups.get(en.key);
       if (!g) {
-        g = {en, labels:new Set(), fetched:new Set(), count:0, q:0, qn:0, rows:[], dims:{}};
+        g = {en, labels:new Set(), fetched:new Set(), count:0, q:0, qn:0, rows:[], dims:{}, met:{}};
         dimNames.forEach(n => g.dims[n] = new Map());
         groups.set(en.key, g);
       }
@@ -1218,13 +1246,14 @@ function aggregate() {
       if (QL[i]) { g.q += QN[i]; g.qn += QL[i]; }
       if (en.fetched) g.fetched.add(en.fetched);
       dimNames.forEach(n => { const v = FIELD_VALS[n][i]; if (v) g.dims[n].set(v, (g.dims[n].get(v) || 0) + 1); });
+      for (const n in METRIC) g.met[n] = (g.met[n] || 0) + METRIC[n][i];
     });
   }
   const out = [...groups.values()].map(g => {
     const labels = [...g.labels];
     const label = labels.slice(0, 3).join(' / ') + (labels.length > 3 ? ` (+${labels.length - 3})` : '');
     const row = makeRow(g.en.kind, label, [...g.fetched].join(', '), g.count, g.en.d, g.en.unknown);
-    row._rows = g.rows; row._q = g.q; row._qn = g.qn; row._dims = g.dims; row._key = g.en.key;
+    row._rows = g.rows; row._q = g.q; row._qn = g.qn; row._dims = g.dims; row._key = g.en.key; row._met = g.met;
     return row;
   });
   RESULTS = out.sort((a, b) => b.Count - a.Count);
@@ -1272,6 +1301,7 @@ function computeSide() {
     const rate = ql ? qn / ql * 100 : 0;
     SUMMARY.push(['Qualified leads', round1(qn)], ['Qualified rate', (QUAL_MODE === 'countpct' ? rawPct(rate) : Math.round(rate)) + '%']);
   }
+  for (const n in METRIC) SUMMARY.push([n, round1(S.reduce((s, i) => s + METRIC[n][i], 0))]);
   FILTERED_ROWS = S.length;
   renderSide(list);
 }
@@ -1298,6 +1328,7 @@ function fillLeadCols(r) {
   }
   const dims = r._dims || {};
   FIELDS.forEach(f => { r[f.name] = dims[f.name] ? mapText(dims[f.name]) : ''; });
+  for (const n in METRIC) r[n] = round1((r._met || {})[n] || 0);
   const [s, why] = adStrategy(r);
   r._why = why;
   const sf = FIELDS.find(f => f.name === 'Ad Strategy');
@@ -1527,7 +1558,7 @@ function mergeRows(rows) {
     const k = (r['Google Ads Location'] || (r.Source + '|' + r['Location / Pincode'])).toLowerCase();
     if (!m.has(k)) {
       const g = Object.assign({}, r, {_lab:new Set(), _fet:new Set(), _src:new Set([r.Source]), _rows:(r._rows || []).slice(),
-        _q:r._q || 0, _qn:r._qn || 0, _keys:(r._keys || [r._key]).slice(), _dims:Object.fromEntries(Object.entries(r._dims || {}).map(([k, m]) => [k, new Map(m)]))});
+        _q:r._q || 0, _qn:r._qn || 0, _keys:(r._keys || [r._key]).slice(), _met:Object.assign({}, r._met), _dims:Object.fromEntries(Object.entries(r._dims || {}).map(([k, m]) => [k, new Map(m)]))});
       add(g._lab, r['Location / Pincode']); add(g._fet, r['Fetched API Pincode']);
       m.set(k, g); return;
     }
@@ -1535,6 +1566,7 @@ function mergeRows(rows) {
     g.Count += r.Count;
     g._q += r._q || 0;
     g._keys.push(...(r._keys || [r._key]));
+    for (const n in (r._met || {})) g._met[n] = (g._met[n] || 0) + r._met[n];
     g._qn += r._qn || 0;
     Object.entries(r._dims || {}).forEach(([n, m]) => {
       if (!g._dims[n]) g._dims[n] = new Map();
@@ -1567,6 +1599,7 @@ function refresh() {
   updateCopyBtn();
   if (RESULTS.length) computeSide();
   saveView();
+  trackHistory();
 }
 
 // ======================================================
@@ -1589,7 +1622,7 @@ function renderHead() {
   const V = visCols();
   const total = 36 + V.reduce((s, c) => s + colW(c), 0);
   const cols = '<col style="width:36px">' + V.map(c => `<col data-c="${esc(c)}" style="width:${colW(c)}px">`).join('');
-  const heads = V.map(c => `<th data-c="${esc(c)}" draggable="true" class="${NUM_COLS.has(c) ? 'n' : ''}" title="Click to sort. Drag to move. Drag the right edge to resize.">
+  const heads = V.map(c => `<th data-c="${esc(c)}" draggable="true" class="${isNumCol(c) ? 'n' : ''}" title="Click to sort. Drag to move. Drag the right edge to resize.">
       <div class="thc"><span class="hl">${esc(c)}</span><span class="arr"></span><span class="tha"><button class="flt${(COLF[c] || LEAD_AF[c]) ? ' on' : ''}" data-fc="${esc(c)}" title="Filter ${esc(c)}" aria-label="Filter ${esc(c)}" aria-haspopup="dialog"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2 3h12l-4.6 5.3V13l-2.8-1.4V8.3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button><button class="cpy" data-cc="${esc(c)}" title="Copy the ${esc(c)} column" aria-label="Copy ${esc(c)} column"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></span></div><span class="rz" draggable="false"></span></th>`).join('');
   wrap.innerHTML = `<table id="grid" style="width:${total}px"><colgroup>${cols}</colgroup>
     <thead><tr><th class="ck"><input type="checkbox" id="ckAll" aria-label="Select all rows"></th>${heads}</tr>
@@ -1615,7 +1648,7 @@ function wireHead() {
     const c = th.dataset.c;
     th.addEventListener('click', e => {
       if (resizing || e.target.classList.contains('rz') || e.target.closest('.cpy') || e.target.closest('.flt')) return;
-      sortState = {col:c, asc: sortState.col === c ? !sortState.asc : !NUM_COLS.has(c)};
+      sortState = {col:c, asc: sortState.col === c ? !sortState.asc : !isNumCol(c)};
       refresh();
       setStatus(`Sorted by ${c} (${sortState.asc ? 'ascending' : 'descending'})`);
     });
@@ -2039,7 +2072,7 @@ let XF = null;   // {ctx, opts:[{v,n}], checked:Set, t}
 function gridCtx(col) {
   return {
     name: col,
-    num: NUM_COLS.has(col),
+    num: isNumCol(col),
     values: () => {
       const m = new Map();
       RESULTS.filter(r => rowPasses(r, col)).forEach(r => valuesOf(r, col).forEach(v => m.set(v, (m.get(v) || 0) + 1)));
@@ -2472,6 +2505,7 @@ function setBusy(b) {
   busy = b;
   ['bImport','bPaste','bRun','sheetSel'].forEach(id => $(id).disabled = b || (id === 'sheetSel' && (!WB || WB.SheetNames.length < 2)));
   $('bClearData').disabled = b || !ROWS.length;
+  if (typeof updateUndoBtns === 'function' && $('bUndo')) updateUndoBtns();
   const has = RESULTS.length > 0;
   ['bCsv','bXlsx','bSheet','bSort','bDup','bReset','bCols'].forEach(id => $(id).disabled = b || !has);
   updateSearchApply();
@@ -2551,6 +2585,11 @@ function saveView() {
 async function restoreSaved() {
   const ds = await idbGet('dataset');
   if (!ds || !ds.ROWS || !ds.ROWS.length) return;
+  const ok = await loadDataset(ds, await idbGet('view') || {});
+  if (ok) setStatus(`Restored ${ROWS.length} rows from ${ds.fileName || 'your last file'}`);
+  else idbClear();
+}
+async function loadDataset(ds, v) {
   try {
     WB = null;
     HEADERS = ds.HEADERS; ROWS = ds.ROWS;
@@ -2565,7 +2604,6 @@ async function restoreSaved() {
     });
     ROW_RES = ds.ROW_RES; ROW_INFO = ds.ROW_INFO;
     computeLeadMeta();
-    const v = await idbGet('view') || {};
     LEAD_F = v.LEAD_F || {}; LEAD_Q = v.LEAD_Q || null; LEAD_AF = v.LEAD_AF || {}; LEAD_AQ = v.LEAD_AQ || null;
     buildLeadSelects();
     aggregate();
@@ -2574,13 +2612,14 @@ async function restoreSaved() {
     if (v.sortState) sortState = v.sortState;
     SEARCH_Q = v.SEARCH_Q || ''; $('q').value = SEARCH_Q;
     RAWF = v.RAWF || {}; RAW_SORT = v.RAW_SORT || null; RAW_ALL = !!v.RAW_ALL; RAW_HIDDEN = !!v.RAW_HIDDEN;
+    resetHistory();
     renderHead();
     refresh();
     syncLeadButtons();
     setBusy(false);
-    setStatus(`Restored ${ROWS.length} rows from ${ds.fileName || 'your last file'}`);
+    return true;
   } catch (e) {
-    idbClear();
+    return false;
   }
 }
 
@@ -2598,6 +2637,15 @@ $('bClearData').onclick = () => {
   clearAllData();
 };
 function clearAllData() {
+  if (ROWS.length) {                     // keep a copy in memory so Ctrl+Z can bring it back
+    CLEARED = {
+      ds: {fileName: $('fileName').textContent, sheet: $('sheetSel').value || '', HEADERS, ROWS, ROW_RES, ROW_INFO,
+           pinSel: $('pinSel').value, qualSel: $('qualSel').value,
+           locCols: [...$('locCols').querySelectorAll('input:checked')].map(c => +c.value)},
+      view: snapState()
+    };
+  }
+  resetHistory();
   idbClear();
   WB = null; HEADERS = []; ROWS = []; RESULTS = []; VIEW = []; ROW_RES = []; ROW_INFO = []; LEAD_ROWS = [];
   FIELD_VALS = {}; TOTALS = {}; SUMMARY = []; QUAL = []; QW = []; QN = []; QL = []; HAS_QUAL = false;
@@ -2613,13 +2661,89 @@ function clearAllData() {
   $('pinSel').innerHTML = '<option value="-1">Auto: scan every column</option>';
   $('qualSel').innerHTML = '<option value="-1">Not in this file</option>';
   syncTabs(); setProgress(0); setBusy(false);
-  setStatus('Data cleared');
+  updateUndoBtns();
+  setStatus('Data cleared · Ctrl+Z to undo');
 }
 
 // Import / paste buttons in the middle of the empty table
 $('tableWrap').addEventListener('click', e => {
   if (e.target.closest('#dropPaste')) { e.stopPropagation(); $('bPaste').click(); return; }
   if (e.target.closest('#dropImport') || (e.target.closest('#drop') && !RESULTS.length)) { e.stopPropagation(); $('file').click(); }
+});
+
+
+// ======================================================
+// UNDO / REDO  (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z)
+// Every filter, search, sort, tab, column move / show / hide and "Clear data" can be undone.
+// ======================================================
+const UNDO = [], REDO = [];
+let LAST_SNAP = null, LAST_KEY = '', RESTORING = false, CLEARED = null;
+const copyF = F => Object.fromEntries(Object.entries(F).filter(([, f]) => f).map(([k, f]) => [k, {sel: f.sel ? new Set(f.sel) : null, expr: f.expr || ''}]));
+function snapState() {
+  return {
+    COLF: copyF(COLF), CHIPS: CHIPS.map(c => Object.assign({}, c)), SRC, SEARCH_Q, MERGED, sortState: Object.assign({}, sortState),
+    LEAD_F: cloneSets(LEAD_F), LEAD_Q: LEAD_Q ? new Set(LEAD_Q) : null, LEAD_AF: cloneSets(LEAD_AF), LEAD_AQ: LEAD_AQ ? new Set(LEAD_AQ) : null,
+    RAWF: copyF(RAWF), RAW_SORT: RAW_SORT ? Object.assign({}, RAW_SORT) : null, RAW_ALL, RAW_HIDDEN,
+    COL_ORDER: COL_ORDER.slice(), USER_VIS: Object.assign({}, USER_VIS)
+  };
+}
+const stateKey = s => JSON.stringify(s, (k, v) => v instanceof Set ? [...v].sort() : v);
+function resetHistory() { UNDO.length = 0; REDO.length = 0; LAST_SNAP = null; LAST_KEY = ''; updateUndoBtns(); }
+function trackHistory() {                       // called after every refresh
+  if (RESTORING || !RESULTS.length) return;
+  const cur = snapState(), k = stateKey(cur);
+  if (k === LAST_KEY) return;
+  if (LAST_SNAP) { UNDO.push(LAST_SNAP); if (UNDO.length > 60) UNDO.shift(); REDO.length = 0; }
+  LAST_SNAP = cur; LAST_KEY = k;
+  updateUndoBtns();
+}
+function restoreState(s) {
+  RESTORING = true;
+  const leadChanged = stateKey([s.LEAD_AF, s.LEAD_AQ]) !== stateKey([LEAD_AF, LEAD_AQ]);
+  const visChanged = stateKey(s.USER_VIS) !== stateKey(USER_VIS);
+  COLF = s.COLF; CHIPS = s.CHIPS; SRC = s.SRC; SEARCH_Q = s.SEARCH_Q; MERGED = s.MERGED; sortState = s.sortState;
+  LEAD_F = s.LEAD_F; LEAD_Q = s.LEAD_Q; LEAD_AF = s.LEAD_AF; LEAD_AQ = s.LEAD_AQ;
+  RAWF = s.RAWF; RAW_SORT = s.RAW_SORT; RAW_ALL = s.RAW_ALL; RAW_HIDDEN = s.RAW_HIDDEN;
+  COL_ORDER = s.COL_ORDER; USER_VIS = s.USER_VIS;
+  $('q').value = SEARCH_Q;
+  if (visChanged) { saveFields(); computeLeadMeta(); }
+  saveLayout();
+  if (leadChanged || visChanged) aggregate();
+  buildFilterOptions(); renderHead(); refresh(); syncLeadButtons(); updateSearchApply();
+  RESTORING = false;
+  LAST_SNAP = snapState(); LAST_KEY = stateKey(LAST_SNAP);
+  updateUndoBtns();
+}
+function undo() {
+  if (CLEARED && !ROWS.length) {               // bring back data removed with "Clear data"
+    const c = CLEARED; CLEARED = null;
+    loadDataset(c.ds, c.view).then(() => { saveDataset(); toast('Data restored'); setStatus(`Restored ${ROWS.length} rows`); });
+    return;
+  }
+  if (!UNDO.length) return;
+  REDO.push(LAST_SNAP);
+  restoreState(UNDO.pop());
+  setStatus('Undone');
+}
+function redo() {
+  if (!REDO.length) return;
+  UNDO.push(LAST_SNAP);
+  restoreState(REDO.pop());
+  setStatus('Redone');
+}
+function updateUndoBtns() {
+  $('bUndo').disabled = busy || !(UNDO.length || (CLEARED && !ROWS.length));
+  $('bRedo').disabled = busy || !REDO.length;
+}
+$('bUndo').onclick = undo;
+$('bRedo').onclick = redo;
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const el = document.activeElement || {};
+  if (/INPUT|TEXTAREA/.test(el.tagName) && el.type !== 'checkbox') return;   // normal text undo inside boxes
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); if (XF) closeXf(); undo(); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); if (XF) closeXf(); redo(); }
 });
 
 // ======================================================
