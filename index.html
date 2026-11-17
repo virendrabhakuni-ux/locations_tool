@@ -1498,6 +1498,7 @@ function rowPasses(r, skipCol) {
   const q = SEARCH_Q.toLowerCase();
   return !q || COLS.some(c => String(r[c]).toLowerCase().includes(q));
 }
+const STRAT_ORDER = ['Scale up', 'Expand', 'Maintain', 'Test', 'Low priority', 'Reduce', 'Exclude', 'Fix location data'];
 function computeView() {
   let v = RESULTS.filter(r => rowPasses(r));
   if (MERGED) v = mergeRows(v);
@@ -1507,7 +1508,13 @@ function computeView() {
     const ex = x === '' || x == null, ey = y === '' || y == null;
     if (ex || ey) return ex === ey ? 0 : ex ? 1 : -1;
     const nx = Number(x), ny = Number(y);
-    const r = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : String(x).localeCompare(String(y), 'en', {numeric:true});
+    let r;
+    if (col === 'Ad Strategy' && STRAT_ORDER.includes(x) && STRAT_ORDER.includes(y)) {
+      r = STRAT_ORDER.indexOf(x) - STRAT_ORDER.indexOf(y);       // Scale up first … Fix location data last
+      if (r === 0) r = b.Count - a.Count;                         // then by lead count
+    } else {
+      r = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : String(x).localeCompare(String(y), 'en', {numeric:true});
+    }
     return asc ? r : -r;
   });
   return v;
@@ -1583,7 +1590,7 @@ function renderHead() {
   const total = 36 + V.reduce((s, c) => s + colW(c), 0);
   const cols = '<col style="width:36px">' + V.map(c => `<col data-c="${esc(c)}" style="width:${colW(c)}px">`).join('');
   const heads = V.map(c => `<th data-c="${esc(c)}" draggable="true" class="${NUM_COLS.has(c) ? 'n' : ''}" title="Click to sort. Drag to move. Drag the right edge to resize.">
-      <div class="thc"><span class="hl">${esc(c)}</span><span class="arr"></span><span class="tha"><button class="flt${COLF[c] ? ' on' : ''}" data-fc="${esc(c)}" title="Filter ${esc(c)}" aria-label="Filter ${esc(c)}" aria-haspopup="dialog"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2 3h12l-4.6 5.3V13l-2.8-1.4V8.3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button><button class="cpy" data-cc="${esc(c)}" title="Copy the ${esc(c)} column" aria-label="Copy ${esc(c)} column"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></span></div><span class="rz" draggable="false"></span></th>`).join('');
+      <div class="thc"><span class="hl">${esc(c)}</span><span class="arr"></span><span class="tha"><button class="flt${(COLF[c] || LEAD_AF[c]) ? ' on' : ''}" data-fc="${esc(c)}" title="Filter ${esc(c)}" aria-label="Filter ${esc(c)}" aria-haspopup="dialog"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2 3h12l-4.6 5.3V13l-2.8-1.4V8.3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button><button class="cpy" data-cc="${esc(c)}" title="Copy the ${esc(c)} column" aria-label="Copy ${esc(c)} column"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></span></div><span class="rz" draggable="false"></span></th>`).join('');
   wrap.innerHTML = `<table id="grid" style="width:${total}px"><colgroup>${cols}</colgroup>
     <thead><tr><th class="ck"><input type="checkbox" id="ckAll" aria-label="Select all rows"></th>${heads}</tr>
 </thead><tbody id="tbody"></tbody></table><div id="more"></div>`;
@@ -1596,7 +1603,7 @@ function syncHeadState() {
     th.querySelector('.arr').textContent = sortState.col === c ? (sortState.asc ? '▲' : '▼') : '';
     th.classList.toggle('sorted', sortState.col === c);
   });
-  document.querySelectorAll('#grid .flt').forEach(b => b.classList.toggle('on', !!COLF[b.dataset.fc]));
+  document.querySelectorAll('#grid .flt').forEach(b => b.classList.toggle('on', !!(COLF[b.dataset.fc] || LEAD_AF[b.dataset.fc])));
   const all = $('ckAll');
   if (all) { all.checked = VIEW.length > 0 && SEL.size === VIEW.length; all.indeterminate = SEL.size > 0 && SEL.size < VIEW.length; }
 }
@@ -2044,8 +2051,33 @@ function gridCtx(col) {
     status: () => `${col} (${VIEW.length} rows)`
   };
 }
+// Columns filled from the raw file (Campaign Type, Ad Strategy, Device…) filter the LEADS themselves,
+// so every other cell, count and percentage is recalculated from the matching leads only.
+// e.g. Campaign Type = demandgen  ->  Ad Strategy / Campaign Name cells no longer show the search leads.
+function dimCtx(col) {
+  const lc = leadCtx(col);
+  return {
+    name: col, num: false,
+    values: lc.values,
+    get: () => LEAD_AF[col] ? {sel: LEAD_AF[col]} : null,
+    set: f => {
+      let sel = f && f.sel ? new Set(f.sel) : null;
+      if (f && f.expr) {                                   // turn a condition into the matching values
+        const all = new Set(FIELD_VALS[col].map((v, i) => leadVal(col, i)));
+        const hit = [...all].filter(v => condMatch(f.expr, v === BLANK ? '' : v));
+        sel = new Set(sel ? hit.filter(v => sel.has(v)) : hit);
+      }
+      if (sel) { LEAD_F[col] = sel; LEAD_AF[col] = new Set(sel); }
+      else { delete LEAD_F[col]; delete LEAD_AF[col]; }
+      applyLeadFilters();
+      syncLeadButtons();
+    },
+    sort: asc => { sortState = {col, asc}; refresh(); },
+    status: () => `${col} (${VIEW.length} rows)`
+  };
+}
 function openXf(ctx, btn) {
-  if (typeof ctx === 'string') ctx = gridCtx(ctx);
+  if (typeof ctx === 'string') ctx = FIELD_VALS[ctx] ? dimCtx(ctx) : gridCtx(ctx);
   const counts = ctx.values();
   const cur = ctx.get();
   const num = ctx.num;
