@@ -1,10 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+<base target="_top">
 <meta charset="utf-8">
-<title>India Pincode Marketing Intelligence</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- SheetJS (reads and writes Excel files), loaded from the cdnjs CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -437,7 +435,7 @@
   <div class="seg" role="group" aria-label="Export">
     <button class="btn" id="bCsv" disabled>CSV</button>
     <button class="btn" id="bXlsx" disabled>Excel</button>
-    <button class="btn" id="bSheet" disabled hidden>Google Sheet</button>
+    <button class="btn" id="bSheet" disabled>Google Sheet</button>
   </div>
   <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
   <button class="btn" id="bClearData" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M4 6h12M8 6V4.5A1 1 0 0 1 9 3.5h2a1 1 0 0 1 1 1V6M5.5 6l.8 9.6A1.5 1.5 0 0 0 7.8 17h4.4a1.5 1.5 0 0 0 1.5-1.4L14.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Clear data</span></button>
@@ -470,7 +468,7 @@
   <span class="lbl">Leads</span>
   <span id="leadSelects" style="display:contents"></span>
   <span class="lead-acts">
-    <button class="btn c-import sm" id="bLeadApply" disabled>Apply</button>
+    <button class="btn c-import sm" id="bLeadApply" disabled hidden>Apply</button>
     <button class="linkbtn" id="bLeadClear" hidden>Clear</button>
   </span>
 </div>
@@ -1084,9 +1082,10 @@ function computeLeadMeta() {
   QUAL = QW.map(w => w === null ? null : w >= 0.5);
   HAS_QUAL = QW.some(w => w !== null);
   FIELD_VALS = {};
-  const raw = (r, i) => String(r[i] == null ? '' : r[i]).trim();
+  const EMPTY = /^(-+|–|—|n\/?a|na|null|none|nil|undefined|\(not set\)|not set|\(none\))$/i;
+  const raw = (r, i) => { const v = String(r[i] == null ? '' : r[i]).trim(); return EMPTY.test(v) ? '' : v; };
   FIELDS.filter(f => f.src >= 0).forEach(f => {
-    FIELD_VALS[f.name] = ROWS.map(r => f.norm === 'platform' ? normPlat(r[f.src]) : raw(r, f.src));
+    FIELD_VALS[f.name] = ROWS.map(r => f.norm === 'platform' ? normPlat(raw(r, f.src)) : raw(r, f.src));
   });
   FIELDS.filter(f => f.src === -2).forEach(f => {
     const names = FIELD_VALS['Campaign Name'];
@@ -1156,9 +1155,8 @@ function leadCtx(key) {
     set: f => {
       const sel = f && f.sel ? f.sel : null;
       if (isQ) LEAD_Q = sel; else if (sel) LEAD_F[key] = sel; else delete LEAD_F[key];
-      syncLeadButtons();
+      applyLeadChoices();                    // Apply in the pop-up updates the table straight away
     },
-    msg: () => leadDirty() ? 'Choose more filters if needed, then click Apply' : 'No change to apply',
     sort: () => {},
     status: () => `leads (${FILTERED_ROWS} rows)`
   };
@@ -2363,98 +2361,12 @@ $('bSheet').onclick = async () => {
 };
 
 // ======================================================
-// PORTABLE BACKEND: India Post API called straight from the browser
-// (replaces Code.gs; no Google account or Apps Script needed)
-// ======================================================
-const API_PIN = 'https://api.postalpincode.in/pincode/';
-const API_PO  = 'https://api.postalpincode.in/postoffice/';
-const PARALLEL = 6, CACHE_DAYS = 30, CACHE_KEY = 'pinTool.cache.v1';
-const AREA_OVERRIDES = {
-  '400070':['Kurla','Mumbai'], '400086':['Ghatkopar','Mumbai'], '400089':['Chembur','Mumbai'], '400072':['Sakinaka','Mumbai'],
-  '400059':['Andheri East','Mumbai'], '400058':['Andheri West','Mumbai'], '400053':['Andheri West','Mumbai'], '400076':['Powai','Mumbai'],
-  '400078':['Bhandup','Mumbai'], '400080':['Mulund','Mumbai'], '410210':['Kharghar','Navi Mumbai'], '400703':['Vashi','Navi Mumbai'],
-  '400706':['Nerul','Navi Mumbai'], '400614':['CBD Belapur','Navi Mumbai'], '400705':['Airoli','Navi Mumbai'],
-  '410206':['Panvel','Navi Mumbai'], '410218':['Kalamboli','Navi Mumbai']
-};
-let LOOKUP_CACHE = {};
-try {
-  LOOKUP_CACHE = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
-  const cutoff = Date.now() - CACHE_DAYS * 864e5;
-  Object.keys(LOOKUP_CACHE).forEach(k => { if (!LOOKUP_CACHE[k].t || LOOKUP_CACHE[k].t < cutoff) delete LOOKUP_CACHE[k]; });
-} catch (e) { LOOKUP_CACHE = {}; }
-function saveCache() { try { localStorage.setItem(CACHE_KEY, JSON.stringify(LOOKUP_CACHE)); } catch (e) {} }
-
-const normP = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-async function fetchJson(url) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 12000);
-      const res = await fetch(url, {signal: ctl.signal});
-      clearTimeout(timer);
-      if (res.ok) return await res.json();
-    } catch (e) {}
-    await sleep(600);
-  }
-  return undefined;   // network failure (different from "not found")
-}
-
-async function pool(items, fn) {
-  let next = 0;
-  const worker = async () => { while (next < items.length) { const i = next++; await fn(items[i], i); } };
-  await Promise.all(Array.from({length: Math.min(PARALLEL, items.length)}, worker));
-}
-
-function parsePincode(pin, data) {
-  if (data && data[0] && data[0].Status === 'Success' && data[0].PostOffice && data[0].PostOffice.length) {
-    const o = data[0].PostOffice[0];
-    let area = o.Name || o.Division || '', city = '';
-    if (AREA_OVERRIDES[pin]) { area = AREA_OVERRIDES[pin][0]; city = AREA_OVERRIDES[pin][1]; }
-    return {found:true, area, city, district:o.District || '', state:o.State || ''};
-  }
-  return {found:false};
-}
-
-function parseLocation(name, data) {
-  if (!(data && data[0] && data[0].Status === 'Success' && data[0].PostOffice && data[0].PostOffice.length)) return {found:false};
-  const offices = data[0].PostOffice, q = normP(name);
-  const clean = o => normP(String(o.Name || '').replace(/\(.*?\)/g, ' ').replace(/\s+(b\.?\s?o|s\.?\s?o|h\.?\s?o|g\.?\s?p\.?\s?o)\.?$/i, ''));
-  const best = offices.find(o => clean(o) === q) || offices.find(o => clean(o).indexOf(q) === 0) || null;
-  if (!best) {
-    const d = offices.find(o => normP(o.District) === q);
-    return d ? {found:true, area:'', city:d.District, district:d.District, state:d.State || '', pincode:''} : {found:false};
-  }
-  return {found:true, area:titleCase(clean(best)) || best.Name, city:'', district:best.District || '', state:best.State || '', pincode:best.Pincode || ''};
-}
-
-async function cachedLookup(items, prefix, urlFn, parseFn) {
-  const out = {}, todo = [];
-  items.forEach(v => { const c = LOOKUP_CACHE[prefix + String(v).toLowerCase()]; if (c) out[v] = c.v; else todo.push(v); });
-  let failed = 0;
-  await pool(todo, async v => {
-    const data = await fetchJson(urlFn(v));
-    if (data === undefined) { failed++; out[v] = {found:false, error:true}; return; }
-    out[v] = parseFn(v, data);
-    LOOKUP_CACHE[prefix + String(v).toLowerCase()] = {v: out[v], t: Date.now()};
-  });
-  saveCache();
-  if (todo.length && failed === todo.length) {
-    throw new Error('could not reach the India Post API (api.postalpincode.in). Check your internet connection and try Analyze again.');
-  }
-  return out;
-}
-
-const LOCAL_API = {
-  lookupPincodes: pins => cachedLookup(pins, 'pin_', p => API_PIN + p, parsePincode),
-  lookupLocations: names => cachedLookup(names, 'loc_', n => API_PO + encodeURIComponent(n), parseLocation),
-  saveToSheet: () => Promise.reject(new Error('Saving to Google Sheets needs the Apps Script version. Use Export Excel instead.'))
-};
-function run(fn, ...args) { return LOCAL_API[fn](...args); }
-
-// ======================================================
 // UTILITIES
 // ======================================================
+function run(fn, ...args) {
+  return new Promise((res, rej) =>
+    google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
+}
 function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name;
@@ -2467,7 +2379,7 @@ function setBusy(b) {
   ['bImport','bPaste','bRun','sheetSel'].forEach(id => $(id).disabled = b || (id === 'sheetSel' && (!WB || WB.SheetNames.length < 2)));
   $('bClearData').disabled = b || !ROWS.length;
   const has = RESULTS.length > 0;
-  ['bCsv','bXlsx','bSort','bDup','bReset','bCols'].forEach(id => $(id).disabled = b || !has);
+  ['bCsv','bXlsx','bSheet','bSort','bDup','bReset','bCols'].forEach(id => $(id).disabled = b || !has);
   updateSearchApply();
   updateCopyBtn();
   if (b) setProgress(0);
