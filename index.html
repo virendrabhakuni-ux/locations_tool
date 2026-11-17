@@ -755,6 +755,17 @@ const CITY = {};
  ['srinagar','Srinagar','Srinagar','Jammu and Kashmir']
 ].forEach(([keys,c,d,s]) => keys.split('|').forEach(k => CITY[k] = {area:'', city:c, district:d, state:s}));
 
+// Head post office pincodes, used when the API has no exact match for a city name
+const CITY_PIN = {
+  'mumbai':'400001', 'navi mumbai':'400703', 'thane':'400601', 'pune':'411001', 'nagpur':'440001', 'nashik':'422001',
+  'delhi':'110001', 'bengaluru':'560001', 'hyderabad':'500001', 'secunderabad':'500003', 'chennai':'600001',
+  'kolkata':'700001', 'ahmedabad':'380001', 'surat':'395003', 'vadodara':'390001', 'jaipur':'302001', 'lucknow':'226001',
+  'noida':'201301', 'gurugram':'122001', 'ghaziabad':'201001', 'chandigarh':'160017', 'indore':'452001', 'bhopal':'462001',
+  'kochi':'682011', 'coimbatore':'641001', 'mysuru':'570001', 'visakhapatnam':'530001', 'bhubaneswar':'751001', 'patna':'800001',
+  'kurla':'400070', 'ghatkopar':'400086', 'chembur':'400089', 'sakinaka':'400072', 'andheri east':'400059', 'andheri west':'400058',
+  'powai':'400076', 'bhandup':'400078', 'mulund':'400080', 'kharghar':'410210', 'vashi':'400703', 'nerul':'400706',
+  'cbd belapur':'400614', 'airoli':'400705', 'panvel':'410206', 'kalamboli':'410218'
+};
 // Localities from the Python tool's override list (Mumbai / Navi Mumbai)
 const LOCALITY = {};
 [
@@ -997,7 +1008,7 @@ async function analyze() {
         const r0 = locInfo[titleCase(key(vs[0]))], r1 = vs[1] ? locInfo[titleCase(key(vs[1]))] : null;
         const api = (r0 && r0.found) ? r0 : (r1 && r1.found) ? r1 : null;
         const hit = localHit(t);
-        if (hit) { info = hit; input = t; fetched = api && api.pincode || ''; break; }
+        if (hit) { info = hit; input = t; fetched = (api && api.pincode) || CITY_PIN[(hit.area || hit.city || '').toLowerCase()] || ''; break; }
         if (api) {
           info = api === r0 ? r0 : Object.assign({}, r1, {area: titleCase(key(t))});
           input = t; fetched = api.pincode || ''; break;
@@ -1786,7 +1797,15 @@ function renderBody() {
     ? `<div class="hint" style="padding:10px 12px">Showing the first ${MAX_RENDER} of ${VIEW.length} rows. Export or copy to get all of them.</div>` : '';
 }
 
+const ROW_HOVER = new Set(['Location / Pincode', 'Fetched API Pincode', 'Count', 'Qualified', 'Qualified %', 'Area', 'District']);
 function cellHtml(c, v, h, r) {
+  let s = cellHtmlBase(c, v, h, r);
+  if ((ROW_HOVER.has(c) || METRIC[c]) && r && r._bd && Object.values(r._bd).some(m => m.size)) {
+    s = s.replace(/^<td class="([^"]*)"/, '<td class="$1 bd" data-bd="__row"').replace(/^(<td[^>]*?) title="[^"]*"/, '$1');
+  }
+  return s;
+}
+function cellHtmlBase(c, v, h, r) {
   const t = esc(v);
   if (c === 'Count') {
     const pct = Math.max(4, Math.round(v / MAX_COUNT * 100));
@@ -2724,7 +2743,12 @@ $('tableWrap').addEventListener('click', e => {
 let HC_T = null, HC_CELL = null;
 function showHoverCard(td) {
   const tr = td.closest('tr[data-i]'); if (!tr) return;
-  const r = VIEW[+tr.dataset.i], c = td.dataset.bd;
+  const r = VIEW[+tr.dataset.i];
+  let c = td.dataset.bd;
+  if (c === '__row' && r && r._bd) {        // row cells: show Ad Strategy, or the first column that has a breakdown
+    c = (r._bd['Ad Strategy'] && r._bd['Ad Strategy'].size) ? 'Ad Strategy'
+      : (FIELDS.map(f => f.name).find(n => r._bd[n] && r._bd[n].size) || '');
+  }
   const bd = r && r._bd && r._bd[c]; if (!bd || !bd.size) return;
   const items = [...bd.entries()].sort((a, b) => b[1].n - a[1].n);
   const total = items.reduce((s, [, b]) => s + b.n, 0) || 1;
