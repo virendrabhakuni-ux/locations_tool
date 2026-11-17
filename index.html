@@ -479,7 +479,6 @@
     <button class="btn icon" id="bUndo" disabled title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M7.5 5 4 8.5 7.5 12M4.5 8.5h7a4.5 4.5 0 0 1 0 9H9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="btn icon" id="bRedo" disabled title="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M12.5 5 16 8.5 12.5 12M15.5 8.5h-7a4.5 4.5 0 0 0 0 9H11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="btn" id="bSort" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M6 4v12M3 13l3 3 3-3M11 5h6M11 9h4.5M11 13h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Sort by count</button>
-    <button class="btn" id="bDup" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M5 3v4a4 4 0 0 0 4 4h1a4 4 0 0 1 4 4v2M15 3v4a4 4 0 0 1-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>Remove duplicates</button>
     <button class="btn" id="bReset" disabled><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Reset filters</button>
     <button class="btn" id="bCopy" disabled>Copy table</button>
   </div>
@@ -2402,11 +2401,6 @@ $('bReset').onclick = () => {
   if (hadLead) { aggregate(); buildFilterOptions(); renderHead(); }
   clearFilters(); refresh(); setStatus('Filter reset');
 };
-$('bDup').onclick = () => {
-  const before = VIEW.length;
-  MERGED = true; refresh();
-  setStatus(`Duplicates removed: ${before - VIEW.length} rows merged into matching locations`);
-};
 $('bCols').onclick = () => { COL_ORDER = allCols(); COL_W = {}; saveLayout(); renderHead(); refresh(); setStatus('Columns reset'); };
 
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
@@ -2571,7 +2565,7 @@ function setBusy(b) {
   $('bClearData').disabled = b || !ROWS.length;
   if (typeof updateUndoBtns === 'function' && $('bUndo')) updateUndoBtns();
   const has = RESULTS.length > 0;
-  ['bCsv','bXlsx','bSheet','bSort','bDup','bReset','bCols'].forEach(id => $(id).disabled = b || !has);
+  ['bCsv','bXlsx','bSheet','bSort','bReset','bCols'].forEach(id => $(id).disabled = b || !has);
   updateSearchApply();
   updateCopyBtn();
   if (b) setProgress(0);
@@ -2672,7 +2666,7 @@ async function loadDataset(ds, v) {
     buildLeadSelects();
     aggregate();
     clearFilters();
-    COLF = v.COLF || {}; CHIPS = v.CHIPS || []; SRC = v.SRC || ''; MERGED = !!v.MERGED;
+    COLF = v.COLF || {}; CHIPS = v.CHIPS || []; SRC = v.SRC || ''; MERGED = false;
     if (v.sortState) sortState = v.sortState;
     SEARCH_Q = v.SEARCH_Q || ''; $('q').value = SEARCH_Q;
     RAWF = v.RAWF || {}; RAW_SORT = v.RAW_SORT || null; RAW_ALL = !!v.RAW_ALL; RAW_HIDDEN = !!v.RAW_HIDDEN;
@@ -2812,7 +2806,7 @@ function restoreState(s) {
   RESTORING = true;
   const leadChanged = stateKey([s.LEAD_AF, s.LEAD_AQ]) !== stateKey([LEAD_AF, LEAD_AQ]);
   const visChanged = stateKey(s.USER_VIS) !== stateKey(USER_VIS);
-  COLF = s.COLF; CHIPS = s.CHIPS; SRC = s.SRC; SEARCH_Q = s.SEARCH_Q; MERGED = s.MERGED; sortState = s.sortState;
+  COLF = s.COLF; CHIPS = s.CHIPS; SRC = s.SRC; SEARCH_Q = s.SEARCH_Q; MERGED = false; sortState = s.sortState;
   LEAD_F = s.LEAD_F; LEAD_Q = s.LEAD_Q; LEAD_AF = s.LEAD_AF; LEAD_AQ = s.LEAD_AQ;
   RAWF = s.RAWF; RAW_SORT = s.RAW_SORT; RAW_ALL = s.RAW_ALL; RAW_HIDDEN = s.RAW_HIDDEN;
   COL_ORDER = s.COL_ORDER; USER_VIS = s.USER_VIS;
