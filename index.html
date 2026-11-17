@@ -75,6 +75,21 @@
   #bApply.pulse{animation:pulse 1.6s ease-in-out infinite}
   @media (prefers-reduced-motion:reduce){#bApply.pulse{animation:none}}
   .btn.icon{width:36px;padding:0;justify-content:center}
+  .hcard{position:fixed;z-index:26;display:none;max-width:min(640px,92vw);padding:10px 12px 12px;border-radius:12px;font-size:12.5px;pointer-events:none;
+    background:linear-gradient(180deg,rgba(255,255,255,.97),rgba(247,249,255,.94));backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,.8);box-shadow:0 0 0 1px var(--edge),0 18px 44px rgba(30,42,90,.2)}
+  .hc-t{font-size:12px;color:var(--muted);margin:0 2px 8px}
+  .hc-t b{color:var(--ink)}
+  .hc-scroll{max-height:320px;overflow:hidden}
+  .hcard table{border-collapse:collapse;width:100%}
+  .hcard th{font-weight:600;color:var(--ink-2);text-align:center;padding:5px 8px;border-bottom:1px solid var(--grid);white-space:nowrap}
+  .hcard th:first-child,.hcard td.hv{text-align:left}
+  .hcard td{padding:5px 8px;text-align:center;border-bottom:1px solid var(--line-soft);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .hcard td.hv{font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+  .hcard td.sh{min-width:110px}
+  .shb{display:inline-block;width:60px;height:6px;border-radius:3px;background:rgba(30,42,90,.08);margin-right:6px;vertical-align:middle;overflow:hidden}
+  .shb i{display:block;height:100%;background:linear-gradient(90deg,#3653F0,#7B6CFF)}
+  td.bd{cursor:help}
   .lead-acts{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
   .tabs{display:inline-flex;padding:3px;gap:2px;background:#E9EBF0;border-radius:9px}
   .tabs button{border:0;background:transparent;height:30px;padding:0 12px;border-radius:7px;color:var(--ink-2);font-weight:600;font-size:12.5px}
@@ -605,6 +620,7 @@
   </div>
 </div>
 
+<div id="hcard" class="hcard" role="tooltip"></div>
 <div id="toast"></div>
 
 <script>
@@ -1116,8 +1132,12 @@ function computeLeadMeta() {
     if (!filled.length) return;
     const withBracket = filled.filter(v => /^-?[\d,]+(?:\.\d+)?\s*\(.*\)$/.test(v)).length / filled.length;
     const numeric = filled.filter(v => cellNums(v)).length / filled.length;
-    if (withBracket >= 0.8 || (f.metric && numeric >= 0.8)) {
-      METRIC[f.name] = vals.map(v => { const n = cellNums(v); return n ? n.n : 0; });
+    const YES = /^(yes|y|true|done|visited|booked)$/i, YESNO = /^(yes|no|y|n|true|false|done|not done|visited|booked|pending)$/i;
+    const yesNo = filled.filter(v => YESNO.test(v)).length / filled.length;
+    const looksCount = f.metric || /visit|booking|booked|(^|[^a-z])sv([^a-z]|$)|site|leads?$|count|qty|quantity|revenue|amount|spend|cost|clicks|impressions/i.test(f.name);
+    const idLike = /(^|[^a-z])(id|code|pin|pincode|zip|phone|mobile|number|no)([^a-z]|$)/i.test(f.name);
+    if (!idLike && (withBracket >= 0.8 || numeric >= 0.95 || (looksCount && (numeric >= 0.8 || yesNo >= 0.8)))) {
+      METRIC[f.name] = vals.map(v => { if (YES.test(v)) return 1; const n = cellNums(v); return n ? n.n : 0; });
       delete FIELD_VALS[f.name];                     // not a text column any more
     }
   });
@@ -1238,8 +1258,8 @@ function aggregate() {
     ents.forEach(en => {
       let g = groups.get(en.key);
       if (!g) {
-        g = {en, labels:new Set(), fetched:new Set(), count:0, q:0, qn:0, rows:[], dims:{}, met:{}};
-        dimNames.forEach(n => g.dims[n] = new Map());
+        g = {en, labels:new Set(), fetched:new Set(), count:0, q:0, qn:0, rows:[], dims:{}, met:{}, bd:{}};
+        dimNames.forEach(n => { g.dims[n] = new Map(); g.bd[n] = new Map(); });
         groups.set(en.key, g);
       }
       g.count++; g.rows.push(i); g.labels.add(en.label);
@@ -1247,13 +1267,22 @@ function aggregate() {
       if (en.fetched) g.fetched.add(en.fetched);
       dimNames.forEach(n => { const v = FIELD_VALS[n][i]; if (v) g.dims[n].set(v, (g.dims[n].get(v) || 0) + 1); });
       for (const n in METRIC) g.met[n] = (g.met[n] || 0) + METRIC[n][i];
+      // breakdown per value (e.g. each Ad Strategy): leads, qualified, SV, Booking …
+      dimNames.forEach(n => {
+        const v = FIELD_VALS[n][i]; if (!v) return;
+        let b = g.bd[n].get(v);
+        if (!b) g.bd[n].set(v, b = {n:0, q:0, ql:0, met:{}});
+        b.n++;
+        if (QL[i]) { b.q += QN[i]; b.ql += QL[i]; }
+        for (const m in METRIC) b.met[m] = (b.met[m] || 0) + METRIC[m][i];
+      });
     });
   }
   const out = [...groups.values()].map(g => {
     const labels = [...g.labels];
     const label = labels.slice(0, 3).join(' / ') + (labels.length > 3 ? ` (+${labels.length - 3})` : '');
     const row = makeRow(g.en.kind, label, [...g.fetched].join(', '), g.count, g.en.d, g.en.unknown);
-    row._rows = g.rows; row._q = g.q; row._qn = g.qn; row._dims = g.dims; row._key = g.en.key; row._met = g.met;
+    row._rows = g.rows; row._q = g.q; row._qn = g.qn; row._dims = g.dims; row._key = g.en.key; row._met = g.met; row._bd = g.bd;
     return row;
   });
   RESULTS = out.sort((a, b) => b.Count - a.Count);
@@ -1551,6 +1580,18 @@ function computeView() {
   return v;
 }
 
+function mergeBd(into, from) {
+  for (const n in (from || {})) {
+    if (!into[n]) into[n] = new Map();
+    from[n].forEach((b, v) => {
+      const t = into[n].get(v) || {n:0, q:0, ql:0, met:{}};
+      t.n += b.n; t.q += b.q; t.ql += b.ql;
+      for (const m in b.met) t.met[m] = (t.met[m] || 0) + b.met[m];
+      into[n].set(v, t);
+    });
+  }
+  return into;
+}
 function mergeRows(rows) {
   const m = new Map();
   const add = (set, v) => String(v || '').split(/\s*[,/]\s*/).filter(Boolean).forEach(x => set.add(x));
@@ -1558,7 +1599,7 @@ function mergeRows(rows) {
     const k = (r['Google Ads Location'] || (r.Source + '|' + r['Location / Pincode'])).toLowerCase();
     if (!m.has(k)) {
       const g = Object.assign({}, r, {_lab:new Set(), _fet:new Set(), _src:new Set([r.Source]), _rows:(r._rows || []).slice(),
-        _q:r._q || 0, _qn:r._qn || 0, _keys:(r._keys || [r._key]).slice(), _met:Object.assign({}, r._met), _dims:Object.fromEntries(Object.entries(r._dims || {}).map(([k, m]) => [k, new Map(m)]))});
+        _q:r._q || 0, _qn:r._qn || 0, _keys:(r._keys || [r._key]).slice(), _met:Object.assign({}, r._met), _bd:mergeBd({}, r._bd), _dims:Object.fromEntries(Object.entries(r._dims || {}).map(([k, m]) => [k, new Map(m)]))});
       add(g._lab, r['Location / Pincode']); add(g._fet, r['Fetched API Pincode']);
       m.set(k, g); return;
     }
@@ -1567,6 +1608,7 @@ function mergeRows(rows) {
     g._q += r._q || 0;
     g._keys.push(...(r._keys || [r._key]));
     for (const n in (r._met || {})) g._met[n] = (g._met[n] || 0) + r._met[n];
+    mergeBd(g._bd, r._bd);
     g._qn += r._qn || 0;
     Object.entries(r._dims || {}).forEach(([n, m]) => {
       if (!g._dims[n]) g._dims[n] = new Map();
@@ -1769,9 +1811,12 @@ function cellHtml(c, v, h, r) {
   }
   const cls = [(c === 'Fetched API Pincode' || (c === 'Location / Pincode' && /^\d{6}/.test(v))) ? 'pin' : '', v === 'Unknown' ? 'unk' : ''].join(' ').trim();
   if (CLICKABLE.has(c) && v !== 'Unknown' && v !== '—') {
+    const hasBd = r && r._bd && r._bd[c] && r._bd[c].size;
+    if (hasBd) return `<td class="${cls} bd" data-bd="${esc(c)}"><a class="lnk" data-c="${esc(c)}" href="#">${inner}</a></td>`;
     const tip = c === 'Ad Strategy' && r && r._why ? r._why + ' Click to show only these.' : `Show only ${c}: ${v}`;
     return `<td class="${cls}" title="${esc(tip)}"><a class="lnk" data-c="${esc(c)}" href="#">${inner}</a></td>`;
   }
+  if (r && r._bd && r._bd[c] && r._bd[c].size) return `<td class="${cls} bd" data-bd="${esc(c)}">${inner}</td>`;
   return `<td class="${cls}" title="${t}">${inner}</td>`;
 }
 
@@ -2671,6 +2716,48 @@ $('tableWrap').addEventListener('click', e => {
   if (e.target.closest('#dropImport') || (e.target.closest('#drop') && !RESULTS.length)) { e.stopPropagation(); $('file').click(); }
 });
 
+
+
+// ======================================================
+// HOVER CARD: contribution of each value in a cell (e.g. Ad Strategy)
+// ======================================================
+let HC_T = null, HC_CELL = null;
+function showHoverCard(td) {
+  const tr = td.closest('tr[data-i]'); if (!tr) return;
+  const r = VIEW[+tr.dataset.i], c = td.dataset.bd;
+  const bd = r && r._bd && r._bd[c]; if (!bd || !bd.size) return;
+  const items = [...bd.entries()].sort((a, b) => b[1].n - a[1].n);
+  const total = items.reduce((s, [, b]) => s + b.n, 0) || 1;
+  const mets = Object.keys(METRIC);
+  const head = `<tr><th>${esc(c)}</th><th>Leads</th><th>Share</th>${HAS_QUAL ? '<th>Qualified</th><th>Qual %</th>' : ''}${mets.map(m => `<th>${esc(m)}</th>`).join('')}</tr>`;
+  const rows = items.map(([v, b]) => {
+    const share = b.n / total * 100;
+    const qp = b.ql ? Math.round(b.q / b.ql * 1000) / 10 : 0;
+    return `<tr><td class="hv">${esc(v)}</td><td>${b.n}</td>
+      <td class="sh"><span class="shb"><i style="width:${Math.max(3, share)}%"></i></span>${Math.round(share)}%</td>
+      ${HAS_QUAL ? `<td>${round1(b.q)}</td><td><span class="qv ${qp >= 50 ? 'q-hi' : qp >= 20 ? 'q-mid' : 'q-lo'}">${qp}%</span></td>` : ''}
+      ${mets.map(m => `<td>${round1(b.met[m] || 0)}</td>`).join('')}</tr>`;
+  }).join('');
+  const card = $('hcard');
+  card.innerHTML = `<div class="hc-t">${esc(c)} contribution · <b>${esc(r['Location / Pincode'])}</b></div>
+    <div class="hc-scroll"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  card.style.display = 'block';
+  const rc = td.getBoundingClientRect(), w = card.offsetWidth, hh = card.offsetHeight;
+  let left = Math.min(rc.left, window.innerWidth - w - 12), top = rc.bottom + 6;
+  if (top + hh > window.innerHeight - 8) top = Math.max(8, rc.top - hh - 6);
+  card.style.left = Math.max(8, left) + 'px'; card.style.top = top + 'px';
+}
+function hideHoverCard() { clearTimeout(HC_T); HC_CELL = null; $('hcard').style.display = 'none'; }
+$('tableWrap').addEventListener('mouseover', e => {
+  const td = e.target.closest('td.bd');
+  if (td === HC_CELL) return;
+  hideHoverCard();
+  if (!td || XF) return;
+  HC_CELL = td;
+  HC_T = setTimeout(() => showHoverCard(td), 250);
+});
+$('tableWrap').addEventListener('mouseleave', hideHoverCard);
+$('tableWrap').addEventListener('scroll', hideHoverCard);
 
 // ======================================================
 // UNDO / REDO  (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z)
